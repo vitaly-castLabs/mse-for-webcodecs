@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="description" content="GUM -> WebCodecs -> WebCrypto -> MSE/EME-for-WebCodecs">
+    <meta name="keywords" content="eme, mse, webcodecs, eme-for-webcodecs, mse-for-webcodecs">
+    <title>WebCodecs + MSE/EME-for-WebCodecs demo</title>
+</head>
+
+<body>
+<div style="height:75vh;width:95vw">
+    <video height="100%" width="100%" controls autoplay id="video"></video>
+</div>
+<br>
+<button id="start-stop-btn">Start</button>
+<br>
+<a href="https://github.com/vitaly-castLabs/eme-for-webcodecs" target=”_blank” style="position:fixed;bottom:8px;left:8px">GitHub</a>
+<script>
+
+const video = document.getElementById('video')
+const startBtn = document.getElementById('start-stop-btn')
+
+let state = 'stopped'
+
+let queue = []
+
+let mediaSource = null
+let sourceBuffer = null
+function setupMse() {
+    mediaSource = new MediaSource()
+    video.src = URL.createObjectURL(mediaSource)
+    mediaSource.addEventListener('sourceopen', () => {
+        mediaSource.duration = Number.POSITIVE_INFINITY    // this is a Safari thing, adding just in case
+
+        URL.revokeObjectURL(video.src)
+        sourceBuffer = mediaSource.addSourceBuffer({videoConfig: {codec: 'vp09.00.10.08'}})
+    })
+}
+
+let startTimestamp = -1
+async function handleChunk(chunk, metadata) {
+    if (startTimestamp < 0)
+        startTimestamp = chunk.timestamp
+
+    const encodedFrameData = new ArrayBuffer(chunk.byteLength)
+    chunk.copyTo(encodedFrameData)
+    const frame = new EncodedVideoChunk({
+        type: chunk.type,
+        timestamp: chunk.timestamp - startTimestamp,
+        duration: 50_000,   // chunk.duration is always set to 0, and MSE-for-WebCodecs doesn't like that
+        data: encodedFrameData
+    })
+    queue.push(frame)
+
+    while (sourceBuffer && !sourceBuffer.updating && queue.length > 0) {
+        const oldestFrame = queue.shift()
+        if (oldestFrame.type === 'key')
+            console.log('Appending key frame,', oldestFrame.byteLength, 'bytes, ts:', oldestFrame.timestamp / 1_000_000)
+
+        sourceBuffer.appendEncodedChunks(oldestFrame)
+    }
+}
+
+async function startStop() {
+    if (state === 'running') {
+        state = 'stopped'
+        return
+    }
+
+    setupMse()
+
+    let stream = null
+    let trackProcessor = null
+    let videoEncoder = null
+    try {
+        stream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: {frameRate: {ideal: 20}}
+        })
+        trackProcessor = new MediaStreamTrackProcessor({track: stream.getVideoTracks()[0]})
+        videoEncoder = new VideoEncoder({
+            output: handleChunk,
+            error: e => {alert(e.message)}
+        })
+    }
+    catch (e) {
+        stream?.getTracks().forEach(t => t.stop())
+        alert(e.message)
+        return
+    }
+
+    if (!videoEncoder)
+        return
+
+    const reader = trackProcessor.readable.getReader()
+
+    state = 'running'
+    startBtn.textContent = 'Stop'
+
+    video.play().then(() => {}).catch(() => {})
+
+    let frameCount = 0
+    while (state === 'running') {
+        const { done, value } = await reader.read()
+
+        if (done)
+            break
+
+        if (videoEncoder.state === 'unconfigured') {
+            const config = {
+                //codec: 'avc1.420032',
+                codec: 'vp09.00.10.08',
+                width: value.codedWidth,
+                height: value.codedHeight,
+                latencyMode: 'realtime',
+                //avc: {format: 'annexb'}
+            }
+            console.log('Video encoder config:', config)
+            videoEncoder.configure(config)
+        }
+
+        // enforce a key frame every 10s
+        videoEncoder.encode(value, {keyFrame: !(frameCount++ % 300)})
+        value.close()
+    }
+
+    video.src = ''
+    startTimestamp = -1
+    startBtn.textContent = 'Start'
+
+    stream?.getTracks().forEach(t => t.stop())
+}
+
+window.onload = function() {
+    if (!SourceBuffer.prototype.hasOwnProperty('appendEncodedChunks')) {
+        alert('appendEncodedChunks is not supported by the browser! Use Chrome and make sure Experimental Web Platform features are enabled in chrome://flags')
+        return
+    }
+
+    startBtn.addEventListener('click', startStop, false)
+    video.playoutDelayHint = video.jitterBufferDelayHint = video.jitterBufferTarget = 0
+}
+</script>
+</body>
+</html>
