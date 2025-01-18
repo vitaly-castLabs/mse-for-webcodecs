@@ -3,9 +3,9 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="description" content="GUM -> WebCodecs -> WebCrypto -> MSE/EME-for-WebCodecs">
-    <meta name="keywords" content="eme, mse, webcodecs, eme-for-webcodecs, mse-for-webcodecs">
-    <title>WebCodecs + MSE/EME-for-WebCodecs demo</title>
+    <meta name="description" content="GUM -> WebCodecs -> MSE-for-WebCodecs">
+    <meta name="keywords" content="mse, webcodecs, mse-for-webcodecs">
+    <title>WebCodecs + MSE-for-WebCodecs demo</title>
 </head>
 
 <body>
@@ -13,13 +13,37 @@
     <video height="100%" width="100%" controls autoplay id="video"></video>
 </div>
 <br>
+<table>
+    <tr>
+        <td style="text-align:right">Codec:</td>
+        <td style="text-align:left">
+            <select style="width:fit-content" id="codec-slct">
+                <option>VP8</option>
+                <option selected>VP9</option>
+                <option>AV1</option>
+                <option>H264</option>
+                <option>HEVC</option>
+            </select>
+        </td>
+    </tr>
+</table>
+<br>
 <button id="start-stop-btn">Start</button>
 <br>
-<a href="https://github.com/vitaly-castLabs/eme-for-webcodecs" target=”_blank” style="position:fixed;bottom:8px;left:8px">GitHub</a>
+<a href="https://github.com/vitaly-castLabs/mse-for-webcodecs" target=”_blank” style="position:fixed;bottom:8px;left:8px">GitHub</a>
 <script>
 
 const video = document.getElementById('video')
 const startBtn = document.getElementById('start-stop-btn')
+const codecSlct = document.getElementById('codec-slct')
+
+const codecMap = {
+    VP8: 'vp8',
+    VP9: 'vp09.00.10.08',
+    AV1: 'av01.0.05M.08',
+    H264: 'avc1.420032',
+    HEVC: 'hev1.1.6.L93.B0'
+}
 
 let state = 'stopped'
 
@@ -34,7 +58,7 @@ function setupMse() {
         mediaSource.duration = Number.POSITIVE_INFINITY    // this is a Safari thing, adding just in case
 
         URL.revokeObjectURL(video.src)
-        sourceBuffer = mediaSource.addSourceBuffer({videoConfig: {codec: 'vp09.00.10.08'}})
+        sourceBuffer = mediaSource.addSourceBuffer({videoConfig: {codec: codecMap[codecSlct.value]}})
     })
 }
 
@@ -76,7 +100,7 @@ async function startStop() {
     try {
         stream = await navigator.mediaDevices.getUserMedia({
             audio: false,
-            video: {frameRate: {ideal: 20}}
+            video: {width: {ideal: 640}, height: {ideal: 480}, frameRate: {ideal: 20}}
         })
         trackProcessor = new MediaStreamTrackProcessor({track: stream.getVideoTracks()[0]})
         videoEncoder = new VideoEncoder({
@@ -109,12 +133,12 @@ async function startStop() {
 
         if (videoEncoder.state === 'unconfigured') {
             const config = {
-                //codec: 'avc1.420032',
-                codec: 'vp09.00.10.08',
+                codec: codecMap[codecSlct.value],
                 width: value.codedWidth,
                 height: value.codedHeight,
                 latencyMode: 'realtime',
-                //avc: {format: 'annexb'}
+                avc: {format: 'annexb'},
+                hevc: {format: 'annexb'}
             }
             console.log('Video encoder config:', config)
             videoEncoder.configure(config)
@@ -125,6 +149,15 @@ async function startStop() {
         value.close()
     }
 
+    if (mediaSource) {
+        if (sourceBuffer)
+            mediaSource.removeSourceBuffer(sourceBuffer)
+
+        sourceBuffer = null
+        mediaSource = null
+    }
+
+    queue = []
     video.src = ''
     startTimestamp = -1
     startBtn.textContent = 'Start'
